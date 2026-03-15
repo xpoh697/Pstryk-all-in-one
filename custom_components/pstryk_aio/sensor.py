@@ -695,6 +695,17 @@ class PstrykUniversalSensor(CoordinatorEntity, SensorEntity):
                 new_value, current_breakdown = self._aggregate_daily_data(
                     cost_frames, COST_FRAME_FAE_COST, current_month_dt # Główna wartość dla bieżącego miesiąca
                 )
+                if new_value is None and meter_usage_data:
+                    monthly_cost = meter_usage_data.get(USAGE_MONTHLY_FAE_COST)
+                    if monthly_cost is not None:
+                        try:
+                            new_value = round(float(monthly_cost), 3)
+                        except (ValueError, TypeError):
+                            _LOGGER.warning(
+                                "(%s) Nie udało się zinterpretować monthly_fae_cost=%r jako liczby.",
+                                self.name,
+                                monthly_cost,
+                            )
                 if current_breakdown:
                     attributes[ATTR_DAILY_BREAKDOWN_CURRENT_MONTH] = current_breakdown
 
@@ -703,6 +714,17 @@ class PstrykUniversalSensor(CoordinatorEntity, SensorEntity):
                 new_value, current_breakdown = self._aggregate_daily_data(
                     cost_frames, COST_FRAME_RAE_YIELD, current_month_dt # Główna wartość dla bieżącego miesiąca
                 )
+                if new_value is None and meter_usage_data:
+                    monthly_yield = meter_usage_data.get(USAGE_MONTHLY_RAE_YIELD)
+                    if monthly_yield is not None:
+                        try:
+                            new_value = round(float(monthly_yield), 3)
+                        except (ValueError, TypeError):
+                            _LOGGER.warning(
+                                "(%s) Nie udało się zinterpretować monthly_rae_yield=%r jako liczby.",
+                                self.name,
+                                monthly_yield,
+                            )
                 if current_breakdown:
                     attributes[ATTR_DAILY_BREAKDOWN_CURRENT_MONTH] = current_breakdown
 

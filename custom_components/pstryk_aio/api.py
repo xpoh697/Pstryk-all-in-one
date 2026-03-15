@@ -273,6 +273,7 @@ class PstrykApiClientApiKey:
                     "fae_cost",
                     "total_cost",
                     "energy_active_import_register_cost",
+                    "energy_import_cost",
                 ),
                 "energy_sold_value": _pick_value(
                     cost_values,
@@ -306,8 +307,10 @@ class PstrykApiClientApiKey:
         normalized_response["fae_total_cost"] = _pick_value(
             summary,
             "fae_total_cost",
+            "total_fae_cost",
             "total_cost_total",
             "energy_active_import_register_cost_total",
+            "energy_import_cost_total",
         )
         normalized_response["total_energy_sold_value"] = _pick_value(
             summary,
