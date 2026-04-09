@@ -48,11 +48,14 @@ def _has_meaningful_price_data(response_data: Optional[dict]) -> bool:
 
 
 def _is_pricing_data_complete(response_data: Optional[dict]) -> bool:
-    """Sprawdza, czy dane cenowe są kompletne (co najmniej 23 ramki dla całego dnia)."""
+    """Sprawdza, czy dane cenowe są kompletne (co najmniej 23 ramki I nie same zera)."""
     if not response_data or not isinstance(response_data.get("frames"), list):
         return False
-    # 23 ramki to bezpieczny próg dla pełnego dnia (uwzględniając zmianę czasu)
-    return len(response_data["frames"]) >= 23
+    # 23 ramki to bezpieczny próg dla pełnego dnia
+    if len(response_data["frames"]) < 23:
+        return False
+    # Jeśli mamy 23+ klatki, ale wszystkie mają cenę 0.0, to prawdopodobnie pola zastępcze (placeholder)
+    return _has_meaningful_price_data(response_data)
 
 
 def _are_frames_for_expected_date(response_data: Optional[dict], expected_date: datetime.date) -> bool:

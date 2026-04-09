@@ -51,17 +51,16 @@ A bug was discovered where `_is_pricing_data_complete` was accessed before its d
 
 ---
 
-## Update 3: Tomorrow's Prices and UI Reporting
-A review of the implementation showed that `update_details` was missing entries for tomorrow's prices when they were loaded from cache. Also, we will add a hint when it's likely "too early" for tomorrow's data.
+## Update 4: Zero-Price Placeholder Handling
+It was discovered that the API sometimes returns a full set of frames (24h) but with all prices set to `0.0` as placeholders.
 
 **Archi:** 
-1. I will add `update_details.append("PurchaseTomorrow: CACHED (Complete)")` and the same for prosumer prices when they are loaded from a complete cache.
-2. I will improve the "FAIL/CACHE" reason for tomorrow's prices: if it's before 13:00, the reason will specifically mention that it's likely too early.
-3. This adds clarity without changing the core "retry-if-partial" logic.
+1. `_is_pricing_data_complete` currently only checks the frame count. I will update it to also require at least one non-zero price using `_has_meaningful_price_data`. 
+2. This will ensure that a "full day of zeros" is treated as incomplete, and the coordinator will continue to poll until real prices are published.
 
 **Skeptic:** 
-1. The reporting fix is necessary for transparency.
-2. The "too early" hint is a good addition to prevent users from thinking the API is "broken" when prices haven't been released yet.
-3. Approved.
+1. Genuine zero prices are possible, but 24 consecutive hours of exactly `0.0` is almost certainly a technical placeholder.
+2. Requiring at least one non-zero value is a safe heuristic for the Polish energy market.
+3. This will correctly handle the case where "slots" are published before "prices".
 
 **Approved by Skeptic.**
