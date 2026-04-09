@@ -65,3 +65,23 @@ The user clarified that zeros can occur in partial data and might later change t
 3. We should still avoid infinite polling for "Prosumer" prices if they are legitimately zero. I'll cap the retries or rely on the fact that at night prices are usually non-zero.
 
 **Approved by Skeptic.**
+
+---
+
+## Update 7: "Any Change, No Regression" Strategy
+The user indicated that my previous logic was still insufficient. The requirement is: update the cache if ANY value changed, but block "24-zero placeholders" if we already have non-zero data.
+
+**Archi:** 
+1. I will implement a helper `_should_accept_new_pricing_data(new, old)`.
+2. **Criteria for accept**: 
+   - `new` is NOT empty.
+   - AND (`old` is empty OR `new` is not "all zeros" while `old` has prices).
+   - AND (`new` has more frames than `old` OR `new` was different from `old`).
+3. This ensures that even a tiny price change (e.g. 0.22 -> 0.23) is captured, while preventing a "wipeout" to all zeros.
+
+**Skeptic:** 
+1. This matches the user's request perfectly: "if at least one hour changed -> update".
+2. The "placeholder protection" (blocking 24 zeros if we have real data) is the safety net.
+3. We should ensure this applies to all four data points (Today/Tomorrow, Purchase/Prosumer).
+
+**Approved by Skeptic.**
