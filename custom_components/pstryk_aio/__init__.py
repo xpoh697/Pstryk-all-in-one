@@ -227,6 +227,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     coordinator._cached_purchase_prices_tomorrow.get("frames") and
                     is_tomorrow_purchase_cache_complete):
                 _LOGGER.debug(f"Używanie kompletnych zbuforowanych cen ZAKUPU na jutro ({tomorrow_local_date}).")
+                update_details.append("PurchaseTomorrow: CACHED (Complete)")
                 pricing_purchase_tomorrow_response = coordinator._cached_purchase_prices_tomorrow
             else:
                 _LOGGER.info(
@@ -256,7 +257,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         pricing_purchase_tomorrow_response = coordinator._cached_purchase_prices_tomorrow
                 else:
                     reason = "brak znaczących danych"
-                    if not _are_frames_for_expected_date(api_response, tomorrow_local_date) and _has_meaningful_price_data(api_response):
+                    if not is_after_13_local:
+                        reason = "zbyt wcześnie (zwykle po 13:00-15:00)"
+                    elif not _are_frames_for_expected_date(api_response, tomorrow_local_date) and _has_meaningful_price_data(api_response):
                         reason = "daty w ramkach nie odpowiadają jutrzejszej dacie"
                     _LOGGER.debug(
                         f"Dane cen ZAKUPU na jutro ({tomorrow_local_date}) nie są dostępne lub niepoprawne ({reason}). "
@@ -323,6 +326,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     coordinator._cached_prosumer_prices_tomorrow.get("frames") and
                     is_tomorrow_prosumer_cache_complete):
                 _LOGGER.debug(f"Używanie kompletnych zbuforowanych cen SPRZEDAŻY na jutro ({tomorrow_local_date}).")
+                update_details.append("ProsumerTomorrow: CACHED (Complete)")
                 pricing_prosumer_tomorrow_response = coordinator._cached_prosumer_prices_tomorrow
             else:
                 _LOGGER.info(
@@ -352,7 +356,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         pricing_prosumer_tomorrow_response = coordinator._cached_prosumer_prices_tomorrow
                 else:
                     reason_prosumer = "brak znaczących danych"
-                    if not _are_frames_for_expected_date(api_response_prosumer, tomorrow_local_date) and _has_meaningful_price_data(api_response_prosumer):
+                    if not is_after_13_local:
+                        reason_prosumer = "zbyt wcześnie (zwykle po 13:00-15:00)"
+                    elif not _are_frames_for_expected_date(api_response_prosumer, tomorrow_local_date) and _has_meaningful_price_data(api_response_prosumer):
                         reason_prosumer = "daty w ramkach nie odpowiadają jutrzejszej dacie"
                     _LOGGER.debug(
                         f"Ceny SPRZEDAŻY na jutro ({tomorrow_local_date}) nie są dostępne lub niepoprawne ({reason_prosumer}). "

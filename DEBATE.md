@@ -51,13 +51,17 @@ A bug was discovered where `_is_pricing_data_complete` was accessed before its d
 
 ---
 
-## Update 2: Moving Helpers to Module Level
-The previous attempt at fixing `UnboundLocalError` by moving functions within `async_update_data` failed.
+## Update 3: Tomorrow's Prices and UI Reporting
+A review of the implementation showed that `update_details` was missing entries for tomorrow's prices when they were loaded from cache. Also, we will add a hint when it's likely "too early" for tomorrow's data.
 
-**Archi:** I will move `_has_meaningful_price_data`, `_is_pricing_data_complete`, and `_are_frames_for_expected_date` to the module level. This is the ultimate fix for scoping issues.
+**Archi:** 
+1. I will add `update_details.append("PurchaseTomorrow: CACHED (Complete)")` and the same for prosumer prices when they are loaded from a complete cache.
+2. I will improve the "FAIL/CACHE" reason for tomorrow's prices: if it's before 13:00, the reason will specifically mention that it's likely too early.
+3. This adds clarity without changing the core "retry-if-partial" logic.
+
 **Skeptic:** 
-1. Agreed. Module-level functions are easier to test and avoid closure-related pitfalls.
-2. We need to pass `_LOGGER` or ensure it's available (it is at the top level).
-3. This will definitely stop the `UnboundLocalError`.
+1. The reporting fix is necessary for transparency.
+2. The "too early" hint is a good addition to prevent users from thinking the API is "broken" when prices haven't been released yet.
+3. Approved.
 
 **Approved by Skeptic.**
