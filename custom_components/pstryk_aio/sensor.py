@@ -103,7 +103,7 @@ from .const import (
     FRIENDLY_NAME_CONSUMPTION_MONTHLY_COST_PLN,
     FRIENDLY_NAME_PRODUCTION_MONTHLY_YIELD_PLN,
 )
-from .const import ATTR_LAST_MONTH_VALUE # Dodano import dla nowego atrybutu
+from .const import ATTR_LAST_MONTH_VALUE, SENSOR_LAST_UPDATE, ATTR_UPDATE_STATUS, ATTR_ERROR_MESSAGE, ATTR_UPDATE_DETAILS # Dodano importy
 from homeassistant.helpers.event import async_track_time_change
 _LOGGER = logging.getLogger(__name__)
 
@@ -124,6 +124,7 @@ SENSOR_DESCRIPTIONS_MAP = {
     SENSOR_PRODUCTION_MONTHLY_KWH: (FRIENDLY_NAME_PRODUCTION_MONTHLY_KWH, SensorDeviceClass.ENERGY, SensorStateClass.TOTAL, UnitOfEnergy.KILO_WATT_HOUR, "mdi:solar-panel-large"),
     SENSOR_CONSUMPTION_MONTHLY_COST_PLN: (FRIENDLY_NAME_CONSUMPTION_MONTHLY_COST_PLN, SensorDeviceClass.MONETARY, SensorStateClass.TOTAL, "PLN", "mdi:cash-minus"),
     SENSOR_PRODUCTION_MONTHLY_YIELD_PLN: (FRIENDLY_NAME_PRODUCTION_MONTHLY_YIELD_PLN, SensorDeviceClass.MONETARY, SensorStateClass.TOTAL, "PLN", "mdi:cash-plus"),
+    SENSOR_LAST_UPDATE: ("Ostatnia aktualizacja", SensorDeviceClass.TIMESTAMP, None, None, "mdi:clock-check-outline"),
 }
 
 
@@ -215,6 +216,8 @@ class PstrykUniversalSensor(CoordinatorEntity, SensorEntity):
     @property
     def available(self) -> bool:
         """Zwraca true, jeśli koordynator ma dane i ostatnia aktualizacja była pomyślna."""
+        if self._sensor_key == SENSOR_LAST_UPDATE:
+            return True # Sensor statusu zawsze dostępny
         if self._sensor_key in [SENSOR_TOMORROW_PURCHASE_PRICE, SENSOR_TOMORROW_SALE_PRICE]:
             return self.coordinator.last_update_success
         return self.coordinator.last_update_success and self.coordinator.data is not None
@@ -448,8 +451,10 @@ class PstrykUniversalSensor(CoordinatorEntity, SensorEntity):
                     daily_sum += float(value)
                     
                     end_local_str = None
-                    if end_utc_str and (end_utc_dt := dt_util.parse_datetime(end_utc_str)):
-                        end_local_str = dt_util.as_local(end_utc_dt).isoformat(timespec='seconds')
+                    if end_utc_str:
+                        end_utc_dt = dt_util.parse_datetime(end_utc_str)
+                        if end_utc_dt:
+                            end_local_str = dt_util.as_local(end_utc_dt).isoformat(timespec='seconds')
 
                     hourly_breakdown.append({
                         "start": start_local_dt.isoformat(timespec='seconds'),
@@ -547,8 +552,10 @@ class PstrykUniversalSensor(CoordinatorEntity, SensorEntity):
                     new_value = None
                     attributes[ATTR_DATA_STATUS_MESSAGE] = "Dane przeważnie są dostępne po godzinie 16:00"
                     _LOGGER.debug(f"({self.name}) Brak danych o cenach zakupu na jutro, ustawiam stan na None i komunikat w atrybutach.")
-                if has_real_data_tomorrow and (avg_price_tomorrow := self._calculate_average_price(pricing_purchase_tomorrow)) is not None:
-                    attributes[f"{ATTR_AVERAGE_PRICE}_tomorrow"] = avg_price_tomorrow
+                if has_real_data_tomorrow:
+                    avg_price_tomorrow = self._calculate_average_price(pricing_purchase_tomorrow)
+                    if avg_price_tomorrow is not None:
+                        attributes[f"{ATTR_AVERAGE_PRICE}_tomorrow"] = avg_price_tomorrow
 
 
             elif self._sensor_key == SENSOR_TODAY_SALE_PRICE:
@@ -595,8 +602,10 @@ class PstrykUniversalSensor(CoordinatorEntity, SensorEntity):
                     new_value = None
                     attributes[ATTR_DATA_STATUS_MESSAGE] = "Dane przeważnie są dostępne po godzinie 16:00"
                     _LOGGER.debug(f"({self.name}) Brak danych o cenach sprzedaży na jutro, ustawiam stan na None i komunikat w atrybutach.")
-                if has_real_data_tomorrow_sale and (avg_price_tomorrow := self._calculate_average_price(pricing_prosumer_tomorrow)) is not None:
-                    attributes[f"{ATTR_AVERAGE_PRICE}_tomorrow"] = avg_price_tomorrow
+                if has_real_data_tomorrow_sale:
+                    avg_price_tomorrow = self._calculate_average_price(pricing_prosumer_tomorrow)
+                    if avg_price_tomorrow is not None:
+                        attributes[f"{ATTR_AVERAGE_PRICE}_tomorrow"] = avg_price_tomorrow
 
 
             elif self._sensor_key == SENSOR_CONSUMPTION_DAILY_COST:
@@ -743,6 +752,17 @@ class PstrykUniversalSensor(CoordinatorEntity, SensorEntity):
                 )
                 if last_month_total_pln is not None:
                     attributes[ATTR_LAST_MONTH_VALUE] = round(last_month_total_pln, 2)
+
+            elif self._sensor_key == SENSOR_LAST_UPDATE:
+                 last_update_iso = data.get(KEY_LAST_UPDATE) if data else None
+                 if last_update_iso:
+                     new_value = dt_util.parse_datetime(last_update_iso)
+                 else:
+                     new_value = None
+                 
+                 attributes[ATTR_UPDATE_STATUS] = data.get(ATTR_UPDATE_STATUS) if data else "Unknown"
+                 attributes[ATTR_ERROR_MESSAGE] = data.get(ATTR_ERROR_MESSAGE) if data else None
+                 attributes[ATTR_UPDATE_DETAILS] = data.get(ATTR_UPDATE_DETAILS) if data else None
 
             _LOGGER.debug(f"({self.name}) Przed ustawieniem _attr_native_value, new_value: '{new_value}' (typ: {type(new_value)})")
             self._attr_native_value = new_value

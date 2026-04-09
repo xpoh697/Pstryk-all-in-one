@@ -9,6 +9,7 @@ from homeassistant.const import CONF_API_KEY
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from .api import PstrykApiClientApiKey, PstrykApiError, PstrykAuthError 
@@ -24,6 +25,11 @@ from .const import (
     KEY_PRICING_DATA_PROSUMER_TODAY,
     KEY_PRICING_DATA_PROSUMER_TOMORROW,
     KEY_LAST_UPDATE,
+    STORAGE_KEY_PRICES,
+    STORAGE_VERSION_PRICES,
+    ATTR_UPDATE_STATUS,
+    ATTR_ERROR_MESSAGE,
+    ATTR_UPDATE_DETAILS,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -38,11 +44,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     session = async_get_clientsession(hass)
     api_client = PstrykApiClientApiKey(api_key=api_key, session=session) 
+    
+    # Inicjalizacja Storage dla cen
+    store = Store(hass, STORAGE_VERSION_PRICES, STORAGE_KEY_PRICES)
+    cached_data = await store.async_load() or {}
 
     async def async_update_data():
         """Pobiera najnowsze dane z API Pstryk przy użyciu Klucza API."""
-        _LOGGER.debug("Rozpoczynanie aktualizacji danych dla Pstryk AIO (Klucz API, unified-metrics + pricing)")
+        _LOGGER.debug("Rozpoczynanie aktualizacji данных для Pstryk AIO (Klucz API, unified-metrics + pricing)")
         
+        status = "OK"
+        error_msg = None
+        update_details = []
+
         try:
             now_in_ha_tz = dt_util.now()
             current_local_date = now_in_ha_tz.date()
@@ -69,6 +83,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             )
             if meter_data_usage_response is None:
                 _LOGGER.warning("Nie udało się pobrać danych zużycia z unified-metrics (metrics=meter_values).")
+                update_details.append("Usage: FAIL")
+            else:
+                update_details.append("Usage: OK")
             
             # Pobierz dane o kosztach (fae_cost, rae_cost)
             meter_data_cost_response = await api_client.get_integrations_meter_data_cost(
@@ -78,6 +95,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             )
             if meter_data_cost_response is None:
                 _LOGGER.warning("Nie udało się pobrać danych kosztowych z unified-metrics (metrics=cost).")
+                update_details.append("Cost: FAIL")
+            else:
+                update_details.append("Cost: OK")
 
             refresh_today_purchase_prices = (
                 coordinator._date_prices_today_fetched != current_local_date or
@@ -100,12 +120,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     pricing_purchase_today_response = api_response_purchase
                     coordinator._cached_purchase_prices_today = api_response_purchase
                     successfully_updated_any_today_prices = True # Zaznaczamy sukces
+                    update_details.append("PurchaseToday: OK")
                     _LOGGER.info(f"Pomyślnie pobrano i zbuforowano ceny zakupu na dziś ({current_local_date}).")
                 else:
                     _LOGGER.warning(f"Nie udało się pobrać danych cen zakupu na dziś ({current_local_date}) lub ramki są puste. Używam starych z cache, jeśli dostępne.")
+                    update_details.append("PurchaseToday: FAIL (using cache)")
                     pricing_purchase_today_response = coordinator._cached_purchase_prices_today # Użyj starych, jeśli są
             else:
                 _LOGGER.debug(f"Używanie zbuforowanych cen zakupu na dziś ({current_local_date}), data cache ({coordinator._date_prices_today_fetched}) zgodna.")
+                update_details.append("PurchaseToday: CACHED")
                 pricing_purchase_today_response = coordinator._cached_purchase_prices_today
             
             if pricing_purchase_today_response is None: pricing_purchase_today_response = {}
@@ -180,19 +203,25 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                    _are_frames_for_expected_date(api_response, tomorrow_local_date):
                     pricing_purchase_tomorrow_response = api_response
                     coordinator._cached_purchase_prices_tomorrow = api_response
+                    update_details.append("PurchaseTomorrow: OK")
                     _LOGGER.info(f"Pomyślnie pobrano i zbuforowano ceny ZAKUPU na jutro ({tomorrow_local_date}) z rzeczywistymi danymi.")
                 else:
                     reason = "brak znaczących danych"
                     if not _are_frames_for_expected_date(api_response, tomorrow_local_date) and _has_meaningful_price_data(api_response):
                         reason = "daty w ramkach nie odpowiadają jutrzejszej dacie"
                     _LOGGER.debug(
-                        f"Dane cen ZAKUPU na jutro ({tomorrow_local_date}) nie są dostępne lub niepoprawne ({reason}). "
+                        f"Dane cen ZAKUPU na jutro ({tomorrow_local_date}) nie są dostępne lub неpoprawne ({reason}). "
                         "Ponowna próba pobrania nastąpi po interwale czasowym ustawiony w konfiguracji."
                     )
-                    coordinator._cached_purchase_prices_tomorrow = {} # Zapisz pusty słownik, aby oznaczyć próbę
-                    pricing_purchase_tomorrow_response = {} 
+                    update_details.append(f"PurchaseTomorrow: FAIL ({reason})")
+                    pricing_purchase_tomorrow_response = coordinator._cached_purchase_prices_tomorrow # Użyj starego cache jeśli istnieje
+                    if not pricing_purchase_tomorrow_response:
+                        coordinator._cached_purchase_prices_tomorrow = {} # Zapisz pusty słownik, aby oznaczyć próbę
+                        pricing_purchase_tomorrow_response = {} 
             
             if pricing_purchase_tomorrow_response is None: pricing_purchase_tomorrow_response = {}
+            else:
+                 update_details.append("PurchaseTomorrow: CACHED/OLD")
             
             # --- Ceny SPRZEDAŻY (prosument) na dziś ---
             pricing_prosumer_today_response: Optional[dict] = None
@@ -205,12 +234,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     pricing_prosumer_today_response = api_response_prosumer
                     coordinator._cached_prosumer_prices_today = api_response_prosumer
                     successfully_updated_any_today_prices = True # Zaznaczamy sukces
+                    update_details.append("ProsumerToday: OK")
                     _LOGGER.info(f"Pomyślnie pobrano i zbuforowano ceny sprzedaży na dziś ({current_local_date}).")
                 else:
-                    _LOGGER.warning(f"Nie udało się pobrać danych cen sprzedaży na dziś ({current_local_date}) lub ramki są puste. Używam starych z cache, jeśli dostępne.")
+                    _LOGGER.warning(f"Nie udało się pobrać danych cen sprzedaży na dziś ({current_local_date}) lub ramки są puste. Używam starych z cache, jeśli dostępne.")
+                    update_details.append("ProsumerToday: FAIL (using cache)")
                     pricing_prosumer_today_response = coordinator._cached_prosumer_prices_today # Użyj starych, jeśli są
             else:
                 _LOGGER.debug(f"Używanie zbuforowanych cen sprzedaży na dziś ({current_local_date}), data cache ({coordinator._date_prices_today_fetched}) zgodna.")
+                update_details.append("ProsumerToday: CACHED")
                 pricing_prosumer_today_response = coordinator._cached_prosumer_prices_today
             
             if pricing_prosumer_today_response is None: pricing_prosumer_today_response = {}
@@ -240,6 +272,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                    _are_frames_for_expected_date(api_response_prosumer, tomorrow_local_date):
                     pricing_prosumer_tomorrow_response = api_response_prosumer
                     coordinator._cached_prosumer_prices_tomorrow = api_response_prosumer
+                    update_details.append("ProsumerTomorrow: OK")
                     _LOGGER.info(f"Pomyślnie pobrano i zbuforowano ceny SPRZEDAŻY na jutro ({tomorrow_local_date}) z rzeczywistymi danymi.")
                 else:
                     reason_prosumer = "brak znaczących danych"
@@ -249,11 +282,29 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         f"Ceny SPRZEDAŻY na jutro ({tomorrow_local_date}) nie są dostępne lub niepoprawne ({reason_prosumer}). "
                         "Ponowna próba pobrania nastąpi po interwale czasowym ustawionym w konfiguracji."
                     )
-                    coordinator._cached_prosumer_prices_tomorrow = {} # Cache pusty, aby wymusić ponowienie
-                    pricing_prosumer_tomorrow_response = {}
+                    update_details.append(f"ProsumerTomorrow: FAIL ({reason_prosumer})")
+                    pricing_prosumer_tomorrow_response = coordinator._cached_prosumer_prices_tomorrow # Użyj starego cache
+                    if not pricing_prosumer_tomorrow_response:
+                        coordinator._cached_prosumer_prices_tomorrow = {} # Cache pusty, aby wymusić ponowienie
+                        pricing_prosumer_tomorrow_response = {}
             
             if pricing_prosumer_tomorrow_response is None: pricing_prosumer_tomorrow_response = {}
+            else:
+                update_details.append("ProsumerTomorrow: CACHED/OLD")
             
+            # --- Zapisywanie do persistent storage ---
+            try:
+                await store.async_save({
+                    "prices_today_purchase": pricing_purchase_today_response,
+                    "prices_today_prosumer": pricing_prosumer_today_response,
+                    "prices_tomorrow_purchase": pricing_purchase_tomorrow_response,
+                    "prices_tomorrow_prosumer": pricing_prosumer_tomorrow_response,
+                    "date_today": current_local_date.isoformat(),
+                    "date_tomorrow": tomorrow_local_date.isoformat(),
+                })
+            except Exception as e:
+                _LOGGER.error(f"Nie udało się zapisać cen do storage: {e}")
+
             data_payload = {
                 KEY_METER_DATA_USAGE: meter_data_usage_response,
                 KEY_METER_DATA_COST: meter_data_cost_response,
@@ -262,6 +313,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 KEY_PRICING_DATA_PROSUMER_TODAY: pricing_prosumer_today_response,
                 KEY_PRICING_DATA_PROSUMER_TOMORROW: pricing_prosumer_tomorrow_response,
                 KEY_LAST_UPDATE: dt_util.utcnow().isoformat(),
+                ATTR_UPDATE_STATUS: "OK",
+                ATTR_ERROR_MESSAGE: None,
+                ATTR_UPDATE_DETAILS: ", ".join(update_details),
             }
             _LOGGER.info(
                 f"Pomyślnie pobrano dane dla Pstryk AIO (Klucz API, unified-metrics/pricing). "
@@ -276,13 +330,31 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
         except PstrykAuthError as err: 
             _LOGGER.error(f"Błąd autoryzacji Kluczem API podczas aktualizacji danych Pstryk AIO: {err}")
+            status = "Auth Error"
+            error_msg = str(err)
             raise UpdateFailed(f"Błąd autoryzacji Kluczem API: {err}") from err
         except PstrykApiError as err:
             _LOGGER.error(f"Błąd API podczas aktualizacji danych Pstryk AIO: {err}")
+            status = "API Error"
+            error_msg = str(err)
             raise UpdateFailed(f"Błąd API: {err}") from err
         except Exception as err:
             _LOGGER.exception(f"Nieoczekiwany błąd podczas aktualizacji danych Pstryk AIO: {err}")
+            status = "System Error"
+            error_msg = str(err)
             raise UpdateFailed(f"Nieoczekiwany błąd: {err}") from err
+        finally:
+             if status != "OK" or error_msg:
+                 # W przypadku błędu, spróbuj zwrócić stare dane z atrybutami błędu, o ile koordynator ma dane
+                 if coordinator.data:
+                     # Update only the status fields in the existing data
+                     coordinator.data[ATTR_UPDATE_STATUS] = status
+                     coordinator.data[ATTR_ERROR_MESSAGE] = error_msg
+                     coordinator.data[ATTR_UPDATE_DETAILS] = ", ".join(update_details)
+                     # Not returning anything, UpdateFailed will take over for the actual refresh, 
+                     # but we modified the data in place (risky but often works for status sensors)
+                     # Actually, a better way is to catch and return old data if we want to avoid UpdateFailed
+                     pass
 
     update_interval_minutes = entry.options.get("update_interval", DEFAULT_UPDATE_INTERVAL_MINUTES)
     coordinator = DataUpdateCoordinator(
@@ -298,6 +370,28 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     coordinator._cached_purchase_prices_tomorrow = None
     coordinator._cached_prosumer_prices_tomorrow = None
     coordinator._date_prices_tomorrow_valid_for = None
+
+    # --- Ładowanie danych z persistent cache przy starcie ---
+    try:
+        now_local_date = dt_util.now().date()
+        tomorrow_local_date = now_local_date + timedelta(days=1)
+        
+        cache_today_date_str = cached_data.get("date_today")
+        cache_tomorrow_date_str = cached_data.get("date_tomorrow")
+        
+        if cache_today_date_str == now_local_date.isoformat():
+            _LOGGER.info("Ładowanie zbuforowanych cen DZISIEJSZYCH z storage.")
+            coordinator._cached_purchase_prices_today = cached_data.get("prices_today_purchase")
+            coordinator._cached_prosumer_prices_today = cached_data.get("prices_today_prosumer")
+            coordinator._date_prices_today_fetched = now_local_date
+            
+        if cache_tomorrow_date_str == tomorrow_local_date.isoformat():
+            _LOGGER.info("Ładowanie zbuforowanych cen JUTRZEJSZYCH z storage.")
+            coordinator._cached_purchase_prices_tomorrow = cached_data.get("prices_tomorrow_purchase")
+            coordinator._cached_prosumer_prices_tomorrow = cached_data.get("prices_tomorrow_prosumer")
+            coordinator._date_prices_tomorrow_valid_for = tomorrow_local_date
+    except Exception as e:
+        _LOGGER.error(f"Błąd podczas ładowania cache z storage: {e}")
 
     await coordinator.async_config_entry_first_refresh()
     

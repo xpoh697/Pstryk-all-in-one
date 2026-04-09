@@ -70,6 +70,9 @@
       },
       "pstryk_aio_next_payment_date": {
         "name": "{config_entry_name} Data następnej płatności"
+      },
+      "last_update": {
+        "name": "{config_entry_name} Ostatnia aktualizacja"
       }
     },
     "binary_sensor": {

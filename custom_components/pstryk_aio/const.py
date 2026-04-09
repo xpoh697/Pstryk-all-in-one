@@ -29,6 +29,9 @@ KEY_PRICING_DATA_PURCHASE_TOMORROW = "pricing_data_purchase_tomorrow"
 KEY_PRICING_DATA_PROSUMER_TODAY = "pricing_data_prosumer_today"
 KEY_PRICING_DATA_PROSUMER_TOMORROW = "pricing_data_prosumer_tomorrow"
 KEY_LAST_UPDATE = "last_api_update"
+# Storage для кэширования
+STORAGE_KEY_PRICES = f"{DOMAIN}_prices"
+STORAGE_VERSION_PRICES = 1
 # API (api.pstryk.pl)
 API_BASE_URL = "https://api.pstryk.pl" 
 API_TIMEOUT = 20
@@ -62,6 +65,7 @@ SENSOR_CONSUMPTION_MONTHLY_KWH = "consumption_monthly_kwh"
 SENSOR_PRODUCTION_MONTHLY_KWH = "production_monthly_kwh"
 SENSOR_CONSUMPTION_MONTHLY_COST_PLN = "consumption_monthly_cost_pln"
 SENSOR_PRODUCTION_MONTHLY_YIELD_PLN = "production_monthly_yield_pln"
+SENSOR_LAST_UPDATE = "last_update" # Nowy sensor statusu
 
 FRIENDLY_NAME_PURCHASE_PRICE = "Obecna cena zakupu prądu"  # Przywrócona nazwa
 FRIENDLY_NAME_SALE_PRICE = "Obecna cena sprzedaży prądu"    # Przywrócona nazwa
@@ -102,6 +106,9 @@ ATTR_DAILY_BREAKDOWN_CURRENT_MONTH = "daily_breakdown_current_month"
 ATTR_DAILY_BREAKDOWN_PREVIOUS_MONTH = "daily_breakdown_previous_month"
 ATTR_HOURLY_BREAKDOWN_CURRENT_DAY = "hourly_breakdown_current_day"
 ATTR_DATA_STATUS_MESSAGE = "data_status"
+ATTR_UPDATE_STATUS = "update_status"
+ATTR_ERROR_MESSAGE = "error_message"
+ATTR_UPDATE_DETAILS = "update_details"
 ATTR_AVERAGE_PRICE = "average_price" # Nowy atrybut dla średniej ceny
 ATTR_LAST_MONTH_VALUE = "last_month_value" # Podsumowanie zeszłego miesiąca
 
