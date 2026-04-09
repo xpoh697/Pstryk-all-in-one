@@ -47,15 +47,35 @@ def _has_meaningful_price_data(response_data: Optional[dict]) -> bool:
     return False
 
 
+def _count_meaningful_frames(response_data: Optional[dict]) -> int:
+    """Liczy ramki z ceną różną od zera."""
+    if not response_data or not isinstance(response_data.get("frames"), list):
+        return 0
+    count = 0
+    for frame in response_data["frames"]:
+        if frame.get("price_gross") is not None and frame.get("price_gross") != 0.0:
+            count += 1
+    return count
+
+
 def _is_pricing_data_complete(response_data: Optional[dict]) -> bool:
-    """Sprawdza, czy dane cenowe są kompletne (co najmniej 23 ramki I nie same zera)."""
+    """Sprawdza, czy dane są kompletne (co najmniej 23 ramki I co najmniej jedna nie-zero)."""
     if not response_data or not isinstance(response_data.get("frames"), list):
         return False
-    # 23 ramki to bezpieczny próg dla pełnego dnia
     if len(response_data["frames"]) < 23:
         return False
-    # Jeśli mamy 23+ klatki, ale wszystkie mają cenę 0.0, to prawdopodobnie pola zastępcze (placeholder)
     return _has_meaningful_price_data(response_data)
+
+
+def _is_ultimate_complete(response_data: Optional[dict]) -> bool:
+    """Sprawdza, czy dane są idealnie kompletne (24 ramki I 24 nie-zera)."""
+    if not response_data or not isinstance(response_data.get("frames"), list):
+        return False
+    if len(response_data["frames"]) < 23: # Pozwalamy na 23 dla DST
+        return False
+    meaningful = _count_meaningful_frames(response_data)
+    # Zwykle 22-24 nie-zera to znak, że dane są окончательно финальные
+    return meaningful >= 23
 
 
 def _are_frames_for_expected_date(response_data: Optional[dict], expected_date: datetime.date) -> bool:
@@ -228,14 +248,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             
             if (coordinator._cached_purchase_prices_tomorrow and
                     coordinator._cached_purchase_prices_tomorrow.get("frames") and
-                    is_tomorrow_purchase_cache_complete):
+                    _is_ultimate_complete(coordinator._cached_purchase_prices_tomorrow)):
                 _LOGGER.debug(f"Używanie kompletnych zbuforowanych cen ZAKUPU na jutro ({tomorrow_local_date}).")
                 update_details.append("PurchaseTomorrow: CACHED (Complete)")
                 pricing_purchase_tomorrow_response = coordinator._cached_purchase_prices_tomorrow
             else:
                 _LOGGER.info(
                     f"Próba pobrania nowych cen ZAKUPU na jutro ({tomorrow_local_date}). "
-                    f"Cache: {'niekompletny' if not is_tomorrow_purchase_cache_complete else 'pusty/stary'}."
+                    "Vigilance mode: szukamy pełnych danych (24h non-zero)."
                 )
                 api_response = await api_client.get_integrations_pricing_data(
                     resolution="hour", window_start=tomorrow_start_utc, window_end=tomorrow_end_utc
@@ -244,19 +264,23 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                    _are_frames_for_expected_date(api_response, tomorrow_local_date):
                     # Sprawdzamy czy nowe dane są lepsze lub równe obecnemu cache
                     new_frame_count = len(api_response.get("frames", []))
-                    old_frame_count = len(coordinator._cached_purchase_prices_tomorrow.get("frames", [])) if coordinator._cached_purchase_prices_tomorrow else 0
+                    new_meaningful = _count_meaningful_frames(api_response)
                     
-                    if new_frame_count >= old_frame_count:
+                    old_frame_count = len(coordinator._cached_purchase_prices_tomorrow.get("frames", [])) if coordinator._cached_purchase_prices_tomorrow else 0
+                    old_meaningful = _count_meaningful_frames(coordinator._cached_purchase_prices_tomorrow) if coordinator._cached_purchase_prices_tomorrow else 0
+
+                    # Warunek "lepszych danych": więcej ramek LUB tyle samo ramek ale więcej cen nie-zero
+                    if (new_frame_count > old_frame_count) or (new_frame_count == old_frame_count and new_meaningful > old_meaningful):
                         pricing_purchase_tomorrow_response = api_response
                         coordinator._cached_purchase_prices_tomorrow = api_response
-                        if _is_pricing_data_complete(api_response):
+                        if _is_ultimate_complete(api_response):
                             update_details.append("PurchaseTomorrow: OK (Complete)")
                             _LOGGER.info(f"Pomyślnie pobrano kompletne ceny ZAKUPU na jutro ({tomorrow_local_date}).")
                         else:
-                            update_details.append(f"PurchaseTomorrow: OK (Partial: {new_frame_count} frames)")
-                            _LOGGER.info(f"Pobrano niekompletne ceny ZAKUPU na jutro ({tomorrow_local_date}): {new_frame_count} ramek. Będę próbować ponownie.")
+                            update_details.append(f"PurchaseTomorrow: OK (Partial/Better: {new_meaningful} non-zeros)")
+                            _LOGGER.info(f"Pobrano lepsze dane (ale wciąż nieidealne) na jutro: {new_frame_count} ramek, {new_meaningful} nie-zero.")
                     else:
-                        _LOGGER.debug("Otrzymano mniej danych dla jutra niż jest w cache, ignoruję.")
+                        _LOGGER.debug("Otrzymano dane dla jutra, ale nie są lepsze niż te w cache. Pomijam update.")
                         pricing_purchase_tomorrow_response = coordinator._cached_purchase_prices_tomorrow
                 else:
                     reason = "brak znaczących danych"
@@ -327,14 +351,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
             if (coordinator._cached_prosumer_prices_tomorrow and
                     coordinator._cached_prosumer_prices_tomorrow.get("frames") and
-                    is_tomorrow_prosumer_cache_complete):
+                    _is_ultimate_complete(coordinator._cached_prosumer_prices_tomorrow)):
                 _LOGGER.debug(f"Używanie kompletnych zbuforowanych cen SPRZEDAŻY na jutro ({tomorrow_local_date}).")
                 update_details.append("ProsumerTomorrow: CACHED (Complete)")
                 pricing_prosumer_tomorrow_response = coordinator._cached_prosumer_prices_tomorrow
             else:
                 _LOGGER.info(
                     f"Próba pobrania nowych cen SPRZEDAŻY na jutro ({tomorrow_local_date}). "
-                    f"Cache: {'niekompletny' if not is_tomorrow_prosumer_cache_complete else 'pusty/stary'}."
+                    "Vigilance mode: szukamy pełnych danych."
                 )
                 api_response_prosumer = await api_client.get_integrations_prosumer_pricing_data(
                     resolution="hour", window_start=tomorrow_start_utc, window_end=tomorrow_end_utc
@@ -343,19 +367,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                    _are_frames_for_expected_date(api_response_prosumer, tomorrow_local_date):
                     # Sprawdzamy czy nowe dane są lepsze lub równe obecnemu cache
                     new_frame_count = len(api_response_prosumer.get("frames", []))
-                    old_frame_count = len(coordinator._cached_prosumer_prices_tomorrow.get("frames", [])) if coordinator._cached_prosumer_prices_tomorrow else 0
+                    new_meaningful = _count_meaningful_frames(api_response_prosumer)
 
-                    if new_frame_count >= old_frame_count:
+                    old_frame_count = len(coordinator._cached_prosumer_prices_tomorrow.get("frames", [])) if coordinator._cached_prosumer_prices_tomorrow else 0
+                    old_meaningful = _count_meaningful_frames(coordinator._cached_prosumer_prices_tomorrow) if coordinator._cached_prosumer_prices_tomorrow else 0
+
+                    if (new_frame_count > old_frame_count) or (new_frame_count == old_frame_count and new_meaningful > old_meaningful):
                         pricing_prosumer_tomorrow_response = api_response_prosumer
                         coordinator._cached_prosumer_prices_tomorrow = api_response_prosumer
-                        if _is_pricing_data_complete(api_response_prosumer):
+                        if _is_ultimate_complete(api_response_prosumer):
                             update_details.append("ProsumerTomorrow: OK (Complete)")
                             _LOGGER.info(f"Pomyślnie pobrano kompletne ceny SPRZEDAŻY na jutro ({tomorrow_local_date}).")
                         else:
-                            update_details.append(f"ProsumerTomorrow: OK (Partial: {new_frame_count} frames)")
-                            _LOGGER.info(f"Pobrano niekompletne ceny SPRZEDAŻY na jutro ({tomorrow_local_date}): {new_frame_count} ramek. Będę próbować ponownie.")
+                            update_details.append(f"ProsumerTomorrow: OK (Partial/Better: {new_meaningful} non-zeros)")
+                            _LOGGER.info(f"Pobrano lepsze dane sprzedaży na jutro: {new_frame_count} ramek, {new_meaningful} nie-zero.")
                     else:
-                        _LOGGER.debug("Otrzymano mniej danych dla jutrzejszej sprzedaży niż jest w cache, ignoruję.")
+                        _LOGGER.debug("Otrzymano dane sprzedaży dla jutra, ale nie są lepsze. Pomijam update.")
                         pricing_prosumer_tomorrow_response = coordinator._cached_prosumer_prices_tomorrow
                 else:
                     reason_prosumer = "brak znaczących danych"

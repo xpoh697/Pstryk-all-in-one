@@ -51,16 +51,17 @@ A bug was discovered where `_is_pricing_data_complete` was accessed before its d
 
 ---
 
-## Update 4: Zero-Price Placeholder Handling
-It was discovered that the API sometimes returns a full set of frames (24h) but with all prices set to `0.0` as placeholders.
+## Update 5: "Better Data" Strategy for Zero Prices
+The user clarified that zeros can occur in partial data and might later change to real prices, or even be valid in the final data. A simple completeness check is insufficient.
 
 **Archi:** 
-1. `_is_pricing_data_complete` currently only checks the frame count. I will update it to also require at least one non-zero price using `_has_meaningful_price_data`. 
-2. This will ensure that a "full day of zeros" is treated as incomplete, and the coordinator will continue to poll until real prices are published.
+1. I will move away from a strict "stop polling when complete" for tomorrow's prices.
+2. Instead, I will implement a "Better Data" rule: the cache is updated if the new response has more frames OR the same number of frames but **more non-zero prices**.
+3. For tomorrow's prices, we will continue polling even if we have 24 frames, as long as there are still 0.0 values that might be placeholders. If we reach 24 non-zero frames, we consider it "Ultimate Complete" and stop.
 
 **Skeptic:** 
-1. Genuine zero prices are possible, but 24 consecutive hours of exactly `0.0` is almost certainly a technical placeholder.
-2. Requiring at least one non-zero value is a safe heuristic for the Polish energy market.
-3. This will correctly handle the case where "slots" are published before "prices".
+1. This is much more robust. It handles the "zeros first, then real prices" flow described by the user.
+2. It's safe because it only overwrites the cache with "richer" data.
+3. We should still avoid infinite polling for "Prosumer" prices if they are legitimately zero. I'll cap the retries or rely on the fact that at night prices are usually non-zero.
 
 **Approved by Skeptic.**
