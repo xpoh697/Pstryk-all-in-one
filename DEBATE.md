@@ -48,3 +48,16 @@ A bug was discovered where `_is_pricing_data_complete` was accessed before its d
 3. This change is safe and straightforward.
 
 **Approved by Skeptic.**
+
+---
+
+## Update 2: Moving Helpers to Module Level
+The previous attempt at fixing `UnboundLocalError` by moving functions within `async_update_data` failed.
+
+**Archi:** I will move `_has_meaningful_price_data`, `_is_pricing_data_complete`, and `_are_frames_for_expected_date` to the module level. This is the ultimate fix for scoping issues.
+**Skeptic:** 
+1. Agreed. Module-level functions are easier to test and avoid closure-related pitfalls.
+2. We need to pass `_LOGGER` or ensure it's available (it is at the top level).
+3. This will definitely stop the `UnboundLocalError`.
+
+**Approved by Skeptic.**

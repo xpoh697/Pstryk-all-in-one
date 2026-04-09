@@ -35,6 +35,54 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 
+def _has_meaningful_price_data(response_data: Optional[dict]) -> bool:
+    if not response_data or not isinstance(response_data.get("frames"), list):
+        return False
+    if not response_data["frames"]:  # Pusta lista ramek
+        return False
+    for frame in response_data["frames"]:
+        # Sprawdzamy, czy istnieje cena brutto i czy jest różna od zera (lub None)
+        if frame.get("price_gross") is not None and frame.get("price_gross") != 0.0:
+            return True
+    return False
+
+
+def _is_pricing_data_complete(response_data: Optional[dict]) -> bool:
+    """Sprawdza, czy dane cenowe są kompletne (co najmniej 23 ramki dla całego dnia)."""
+    if not response_data or not isinstance(response_data.get("frames"), list):
+        return False
+    # 23 ramki to bezpieczny próg dla pełnego dnia (uwzględniając zmianę czasu)
+    return len(response_data["frames"]) >= 23
+
+
+def _are_frames_for_expected_date(response_data: Optional[dict], expected_date: datetime.date) -> bool:
+    """Sprawdza, czy daty w ramkach odpowiedzi API odpowiadają oczekiwanej dacie."""
+    if not response_data or not isinstance(response_data.get("frames"), list) or not response_data["frames"]:
+        _LOGGER.debug(f"Brak ramek w odpowiedzi do sprawdzenia daty dla {expected_date}.")
+        return False  # Brak ramek, więc nie mogą być na oczekiwaną datę
+
+    # Sprawdź pierwszą ramkę, zakładając, że wszystkie są z tego samego dnia
+    first_frame = response_data["frames"][0]
+    start_utc_str = first_frame.get("start")
+    if not start_utc_str:
+        _LOGGER.debug(f"Pierwsza ramka w odpowiedzi dla {expected_date} nie ma klucza 'start': {first_frame}")
+        return False
+
+    try:
+        start_utc_dt = dt_util.parse_datetime(start_utc_str)
+        if not start_utc_dt:
+            _LOGGER.debug(f"Nie udało się sparsować 'start' z pierwszej ramki dla {expected_date}: {start_utc_str}")
+            return False
+
+        start_local_dt = dt_util.as_local(start_utc_dt)  # Konwersja na czas lokalny HA
+        frame_date = start_local_dt.date()
+
+        return frame_date == expected_date
+    except Exception as e:
+        _LOGGER.error(f"Błąd podczas sprawdzania daty ramek dla {expected_date}: {e}. Ramka: {first_frame}", exc_info=True)
+        return False
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Konfiguruje Pstryk AIO z wpisu konfiguracyjnego (Klucz API)."""
     hass.data.setdefault(DOMAIN, {})
@@ -58,50 +106,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         update_details = []
 
         try:
-            def _has_meaningful_price_data(response_data: Optional[dict]) -> bool:
-                if not response_data or not isinstance(response_data.get("frames"), list):
-                    return False
-                if not response_data["frames"]: # Pusta lista ramek
-                    return False
-                for frame in response_data["frames"]:
-                    # Sprawdzamy, czy istnieje cena brutto i czy jest różna od zera (lub None)
-                    if frame.get("price_gross") is not None and frame.get("price_gross") != 0.0:
-                        return True
-                return False
-
-            def _is_pricing_data_complete(response_data: Optional[dict]) -> bool:
-                """Sprawdza, czy dane cenowe są kompletne (co najmniej 23 ramki dla całego dnia)."""
-                if not response_data or not isinstance(response_data.get("frames"), list):
-                    return False
-                # 23 ramki to bezpieczny próg dla pełnego dnia (uwzględniając zmianę czasu)
-                return len(response_data["frames"]) >= 23
-
-            def _are_frames_for_expected_date(response_data: Optional[dict], expected_date: datetime.date) -> bool:
-                """Sprawdza, czy daty w ramkach odpowiedzi API odpowiadają oczekiwanej dacie."""
-                if not response_data or not isinstance(response_data.get("frames"), list) or not response_data["frames"]:
-                    _LOGGER.debug(f"Brak ramek w odpowiedzi do sprawdzenia daty dla {expected_date}.")
-                    return False # Brak ramek, więc nie mogą być na oczekiwaną datę
-                
-                # Sprawdź pierwszą ramkę, zakładając, że wszystkie są z tego samego dnia
-                first_frame = response_data["frames"][0]
-                start_utc_str = first_frame.get("start")
-                if not start_utc_str:
-                    _LOGGER.debug(f"Pierwsza ramka w odpowiedzi dla {expected_date} nie ma klucza 'start': {first_frame}")
-                    return False
-                
-                try:
-                    start_utc_dt = dt_util.parse_datetime(start_utc_str)
-                    if not start_utc_dt:
-                        _LOGGER.debug(f"Nie udało się sparsować 'start' z pierwszej ramki dla {expected_date}: {start_utc_str}")
-                        return False
-                    
-                    start_local_dt = dt_util.as_local(start_utc_dt) # Konwersja na czas lokalny HA
-                    frame_date = start_local_dt.date()
-                    
-                    return frame_date == expected_date
-                except Exception as e:
-                    _LOGGER.error(f"Błąd podczas sprawdzania daty ramek dla {expected_date}: {e}. Ramka: {first_frame}", exc_info=True)
-                    return False
 
             now_in_ha_tz = dt_util.now()
             current_local_date = now_in_ha_tz.date()
