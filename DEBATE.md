@@ -35,3 +35,16 @@ Archi's plan is a good start, but it has flaws:
 I approve this consolidated approach. It ensures data completeness without introducing recursive loops or excessive API load.
 
 **Approved by Skeptic.**
+
+---
+
+## Update: Fix for UnboundLocalError
+A bug was discovered where `_is_pricing_data_complete` was accessed before its definition.
+
+**Archi:** We need to move all nested helper functions (`_has_meaningful_price_data`, `_is_pricing_data_complete`, `_are_frames_for_expected_date`) to the top of `async_update_data`.
+**Skeptic:** 
+1. Correct, this is a standard Python hoisting issue with local variables.
+2. We should group them at the very beginning of the function to ensure they are available for all logic below.
+3. This change is safe and straightforward.
+
+**Approved by Skeptic.**
