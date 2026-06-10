@@ -88,7 +88,7 @@ The user indicated that my previous logic was still insufficient. The requiremen
 
 ---
 
-## [2026-06-10 08:36] Задача: перестали обновляться цены продажи (проблема с кэшированием)
+## Update 8: [2026-06-10 08:36] Задача: перестали обновляться цены продажи (проблема с кэшированием)
 
 ### Archi
 Вчера всё работало, а сегодня цены продажи перестали обновляться и ушли в 'Неизвестно'. Проблема кроется в логике кэширования в файле `__init__.py`:
@@ -124,3 +124,28 @@ The user indicated that my previous logic was still insufficient. The requiremen
    ```
 4. Корректно выставлять флаг `_date_prices_today_fetched = current_local_date` в конце `async_update_data`, если кэшированные цены для сегодняшнего дня полны и актуальны.
 5. Изменения будут сохранены на диск в конце итерации обновления через существующий вызов `store.async_save()`.
+
+---
+
+## Update 9: [2026-06-10 08:43] Задача: Ошибка логики обновления кэша продажи (prosumer)
+
+### Archi
+В коде была допущена ошибка: в условиях вычисления флага `refresh_today_prosumer` отсутствовала проверка того, относятся ли находящиеся в кэше цены продажи к сегодняшнему дню. Условие выглядело так:
+`refresh_today_prosumer = (coordinator._date_prices_today_fetched != current_local_date or not is_today_prosumer_complete)`
+После успешного получения цен покупки флаг `_date_prices_today_fetched` выставлялся в `current_local_date`, из-за чего первое условие становилось `False`. А поскольку вчерашний кэш продаж был "полным" (содержал 24 рамки), второе условие тоже давало `False`. В итоге `refresh_today_prosumer` становился `False`, запрос к API блокировался, и интеграция продолжала использовать вчерашний кэш продаж с неактуальными временными метками.
+
+**Решение:**
+Добавить вычисление `is_prosumer_for_today` с помощью `_are_frames_for_expected_date` и дополнить условие:
+```python
+is_prosumer_for_today = _are_frames_for_expected_date(coordinator._cached_prosumer_prices_today, current_local_date)
+refresh_today_prosumer = (coordinator._date_prices_today_fetched != current_local_date or not is_today_prosumer_complete or not is_prosumer_for_today)
+```
+
+### Skeptic
+Замечания:
+1. Данное изменение полностью логично и устраняет асимметрию между кодом обновления цен покупки и продажи.
+2. Проверка даты кэша является критически важным триггером для сброса устаревших данных при смене суток.
+3. Процедура безопасна и не вызывает лишних API-вызовов, если кэш уже актуален.
+
+### Заключение
+Решено дополнить условие `refresh_today_prosumer` проверкой актуальности даты кэша цен продажи (`is_prosumer_for_today`).

@@ -218,7 +218,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
             # --- Ceny ZAKUPU Сегодня ---
             is_today_purchase_complete = _is_pricing_data_complete(coordinator._cached_purchase_prices_today)
-            refresh_today_purchase = (coordinator._date_prices_today_fetched != current_local_date or not is_today_purchase_complete)
+            is_purchase_for_today = _are_frames_for_expected_date(coordinator._cached_purchase_prices_today, current_local_date)
+            refresh_today_purchase = (coordinator._date_prices_today_fetched != current_local_date or not is_today_purchase_complete or not is_purchase_for_today)
             
             pricing_purchase_today_response = coordinator._cached_purchase_prices_today
             if refresh_today_purchase:
@@ -235,7 +236,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
             # --- Ceny SPRZEDAŻY Сегодня ---
             is_today_prosumer_complete = _is_pricing_data_complete(coordinator._cached_prosumer_prices_today)
-            refresh_today_prosumer = (coordinator._date_prices_today_fetched != current_local_date or not is_today_prosumer_complete)
+            is_prosumer_for_today = _are_frames_for_expected_date(coordinator._cached_prosumer_prices_today, current_local_date)
+            refresh_today_prosumer = (coordinator._date_prices_today_fetched != current_local_date or not is_today_prosumer_complete or not is_prosumer_for_today)
 
             pricing_prosumer_today_response = coordinator._cached_prosumer_prices_today
             if refresh_today_prosumer:
