@@ -76,18 +76,42 @@ def _is_ultimate_complete(response_data: Optional[dict]) -> bool:
     return meaningful >= 23
 
 
+def _get_data_date(data: Optional[dict]) -> Optional[datetime.date]:
+    """Bezpiecznie pobiera datę pierwszej ramki w lokalnej strefie czasowej."""
+    if not data or not isinstance(data.get("frames"), list) or not data["frames"]:
+        return None
+    first_frame = data["frames"][0]
+    start_str = first_frame.get("start")
+    if not start_str:
+        return None
+    try:
+        dt = dt_util.parse_datetime(start_str)
+        if dt:
+            return dt_util.as_local(dt).date()
+    except Exception:
+        pass
+    return None
+
+
 def _should_accept_new_pricing_data(new_data: Optional[dict], old_data: Optional[dict]) -> bool:
     """Decyduje, czy nowe dane cenowe powinny zastąpić te w cache."""
     if not new_data or not isinstance(new_data.get("frames"), list) or not new_data["frames"]:
         return False
     
-    new_frames_count = len(new_data["frames"])
-    new_meaningful_count = _count_meaningful_frames(new_data)
+    new_date = _get_data_date(new_data)
+    old_date = _get_data_date(old_data)
     
     # Jeśli cache jest pusty, bierzemy cokolwiek co ma ramki
     if not old_data or not isinstance(old_data.get("frames"), list) or not old_data["frames"]:
         return True
         
+    # Jeśli dane dotyczą różnych dni (smena sutok), to stary kesh ustarel i novye dannye prinimaem bezuslovno
+    if new_date and old_date and new_date != old_date:
+        return True
+        
+    new_frames_count = len(new_data["frames"])
+    new_meaningful_count = _count_meaningful_frames(new_data)
+    
     old_frames_count = len(old_data["frames"])
     old_meaningful_count = _count_meaningful_frames(old_data)
 
@@ -107,6 +131,7 @@ def _should_accept_new_pricing_data(new_data: Optional[dict], old_data: Optional
         return True
         
     return False
+
 
 
 def _are_frames_for_expected_date(response_data: Optional[dict], expected_date: datetime.date) -> bool:
@@ -179,8 +204,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             )
             update_details.append("Cost: OK" if meter_data_cost_response else "Cost: FAIL")
 
-            # Reset cache jutra przy zmianie dnia
+            # Reset cache jutra przy zmianie dnia i przesunięcie cen
             if coordinator._date_prices_tomorrow_valid_for != tomorrow_local_date:
+                if coordinator._cached_purchase_prices_tomorrow:
+                    coordinator._cached_purchase_prices_today = coordinator._cached_purchase_prices_tomorrow
+                if coordinator._cached_prosumer_prices_tomorrow:
+                    coordinator._cached_prosumer_prices_today = coordinator._cached_prosumer_prices_tomorrow
                 coordinator._cached_purchase_prices_tomorrow = {}
                 coordinator._cached_prosumer_prices_tomorrow = {}
                 coordinator._date_prices_tomorrow_valid_for = tomorrow_local_date
@@ -221,7 +250,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             else:
                 update_details.append("ProsumerToday: CACHED")
 
-            if successfully_updated_any_today_prices and _is_pricing_data_complete(coordinator._cached_purchase_prices_today) and _is_pricing_data_complete(coordinator._cached_prosumer_prices_today):
+            if _is_pricing_data_complete(coordinator._cached_purchase_prices_today) and \
+               _are_frames_for_expected_date(coordinator._cached_purchase_prices_today, current_local_date) and \
+               _is_pricing_data_complete(coordinator._cached_prosumer_prices_today) and \
+               _are_frames_for_expected_date(coordinator._cached_prosumer_prices_today, current_local_date):
                 coordinator._date_prices_today_fetched = current_local_date
 
             # --- Ceny ZAKUPU Jutro ---
