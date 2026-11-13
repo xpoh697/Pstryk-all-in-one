@@ -14,6 +14,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.device_registry import DeviceEntryType
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity, DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
 
@@ -32,6 +33,8 @@ from .const import (
     SENSOR_TOMORROW_PURCHASE_PRICE,
     SENSOR_TODAY_SALE_PRICE,
     SENSOR_TOMORROW_SALE_PRICE,
+    SENSOR_BUY_PRICE_48H,
+    SENSOR_SELL_PRICE_48H,
     SENSOR_CONSUMPTION_DAILY_COST,
     SENSOR_PRODUCTION_DAILY_YIELD, 
     SENSOR_BILLING_BALANCE_MONTHLY_PLN,
@@ -48,6 +51,8 @@ from .const import (
     CONF_EXPENSIVE_SALE_PRICE_THRESHOLD,
     ATTR_PRICE_TODAY,
     ATTR_PRICE_TOMORROW,
+    ATTR_PRICE_TODAY_48H,
+    ATTR_PRICE_TOMORROW_48H,
     ATTR_PRICE_START_TIME,
     ATTR_PRICE_END_TIME,
     ATTR_PRICE_VALUE_NET,
@@ -112,6 +117,8 @@ SENSOR_DESCRIPTIONS_MAP = {
     SENSOR_TOMORROW_PURCHASE_PRICE: ("Cena zakupu prądu (jutro)", SensorDeviceClass.MONETARY, None, ATTR_PRICE_UNIT, "mdi:transmission-tower-import"),
     SENSOR_TODAY_SALE_PRICE: (FRIENDLY_NAME_SALE_PRICE, SensorDeviceClass.MONETARY, None, ATTR_PRICE_UNIT, "mdi:transmission-tower-export"),
     SENSOR_TOMORROW_SALE_PRICE: ("Cena sprzedaży prądu (jutro)", SensorDeviceClass.MONETARY, None, ATTR_PRICE_UNIT, "mdi:transmission-tower-export"),
+    SENSOR_BUY_PRICE_48H: ("pstryk_buy_price_48h", None, SensorStateClass.MEASUREMENT, ATTR_PRICE_UNIT, "mdi:currency-eur"),
+    SENSOR_SELL_PRICE_48H: ("pstryk_sell_price_48h", None, SensorStateClass.MEASUREMENT, ATTR_PRICE_UNIT, "mdi:currency-eur"),
     SENSOR_CONSUMPTION_DAILY_COST: (FRIENDLY_NAME_CONSUMPTION_DAILY_COST, SensorDeviceClass.MONETARY, SensorStateClass.TOTAL, "PLN", "mdi:cash-minus"),
     SENSOR_PRODUCTION_DAILY_YIELD: (FRIENDLY_NAME_PRODUCTION_DAILY_YIELD, SensorDeviceClass.MONETARY, SensorStateClass.TOTAL, "PLN", "mdi:cash-plus"),
     SENSOR_BILLING_BALANCE_MONTHLY_PLN: (FRIENDLY_NAME_BILLING_BALANCE_MONTHLY_PLN, SensorDeviceClass.MONETARY, SensorStateClass.TOTAL, "PLN", "mdi:scale-balance"),
@@ -160,7 +167,7 @@ async def async_setup_entry(
         _LOGGER.warning(f"Nie utworzono żadnych encji sensorów dla '{config_entry_title}'.")
 
 
-class PstrykUniversalSensor(CoordinatorEntity, SensorEntity):
+class PstrykUniversalSensor(CoordinatorEntity, RestoreEntity, SensorEntity):
     """Uniwersalna klasa sensora Pstryk AIO."""
 
     def __init__(
@@ -179,12 +186,19 @@ class PstrykUniversalSensor(CoordinatorEntity, SensorEntity):
         super().__init__(coordinator)
         self._sensor_key = sensor_key
         self._attr_unique_id = f"{self._sensor_key}" 
-        self._attr_name = f"{DEFAULT_NAME} {name_suffix}"
+        if self._sensor_key in (SENSOR_BUY_PRICE_48H, SENSOR_SELL_PRICE_48H):
+            self._attr_name = name_suffix
+            self.entity_id = f"sensor.{self._sensor_key}"
+        else:
+            self._attr_name = f"{DEFAULT_NAME} {name_suffix}"
         self._attr_device_class = device_class
         self._attr_state_class = state_class
         self._attr_native_unit_of_measurement = unit_of_measurement
         self._attr_icon = icon
         self._attr_extra_state_attributes = {}
+        self._saved_price_today: List[Dict[str, Any]] = []
+        self._saved_price_tomorrow: List[Dict[str, Any]] = []
+        self._last_valid_price: Optional[float] = None
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, entry_id)},
             name=config_entry_title or DEFAULT_NAME,
@@ -198,7 +212,28 @@ class PstrykUniversalSensor(CoordinatorEntity, SensorEntity):
     async def async_added_to_hass(self) -> None:
         """Handle entity which will be added to Home Assistant."""
         await super().async_added_to_hass() # Essential for CoordinatorEntity
-        if self._sensor_key in [SENSOR_TODAY_PURCHASE_PRICE, SENSOR_TODAY_SALE_PRICE]:
+        if self._sensor_key in (SENSOR_BUY_PRICE_48H, SENSOR_SELL_PRICE_48H):
+            last_state = await self.async_get_last_state()
+            if last_state is not None:
+                if last_state.state not in (None, "unknown", "unavailable") and self._last_valid_price is None:
+                    try:
+                        self._last_valid_price = float(last_state.state)
+                    except (ValueError, TypeError):
+                        pass
+                restored_today = last_state.attributes.get(ATTR_PRICE_TODAY_48H)
+                if not self._saved_price_today and isinstance(restored_today, list) and restored_today:
+                    self._saved_price_today = restored_today
+                restored_tomorrow = last_state.attributes.get(ATTR_PRICE_TOMORROW_48H)
+                if not self._saved_price_tomorrow and isinstance(restored_tomorrow, list) and restored_tomorrow:
+                    self._saved_price_tomorrow = restored_tomorrow
+            self._update_state()
+
+        if self._sensor_key in [
+            SENSOR_TODAY_PURCHASE_PRICE,
+            SENSOR_TODAY_SALE_PRICE,
+            SENSOR_BUY_PRICE_48H,
+            SENSOR_SELL_PRICE_48H,
+        ]:
             _LOGGER.debug(f"Sensor {self.name} ({self._sensor_key}): Setting up hourly state refresh.")
             self.async_on_remove(
                 async_track_time_change(
@@ -208,7 +243,10 @@ class PstrykUniversalSensor(CoordinatorEntity, SensorEntity):
 
     async def _hourly_refresh_state(self, now: datetime) -> None:
         """Called at the top of the hour to refresh the sensor's state from existing coordinator data."""
-        if self.coordinator.last_update_success and self.coordinator.data:
+        if (self.coordinator.last_update_success and self.coordinator.data) or self._sensor_key in (
+            SENSOR_BUY_PRICE_48H,
+            SENSOR_SELL_PRICE_48H,
+        ):
             _LOGGER.debug(f"Sensor {self.name} ({self._sensor_key}): Hourly refresh triggered at {now}. Re-evaluating state from coordinator data.")
             self._update_state()
             self.async_write_ha_state()
@@ -216,8 +254,8 @@ class PstrykUniversalSensor(CoordinatorEntity, SensorEntity):
     @property
     def available(self) -> bool:
         """Zwraca true, jeśli koordynator ma dane i ostatnia aktualizacja była pomyślna."""
-        if self._sensor_key == SENSOR_LAST_UPDATE:
-            return True # Sensor statusu zawsze dostępny
+        if self._sensor_key in (SENSOR_LAST_UPDATE, SENSOR_BUY_PRICE_48H, SENSOR_SELL_PRICE_48H):
+            return True # Sensory statusu i 48h zawsze dostępne dzięki wewnętrznemu cache
         if self._sensor_key in [SENSOR_TOMORROW_PURCHASE_PRICE, SENSOR_TOMORROW_SALE_PRICE]:
             return self.coordinator.last_update_success
         return self.coordinator.last_update_success and self.coordinator.data is not None
@@ -316,6 +354,83 @@ class PstrykUniversalSensor(CoordinatorEntity, SensorEntity):
             except Exception as e:
                 _LOGGER.warning(f"({self.name}) Błąd podczas formatowania ramki cenowej dla atrybutów: {frame}, błąd: {e}")
         return formatted_frames
+
+    def _update_48h_price_sensor(
+        self,
+        pricing_today: Optional[Dict[str, Any]],
+        pricing_tomorrow: Optional[Dict[str, Any]],
+        cheap_thresh: Optional[float],
+        expensive_thresh: Optional[float],
+    ) -> tuple[Optional[float], List[Dict[str, Any]], List[Dict[str, Any]]]:
+        """Oblicza stan i atrybuty price_today / price_tomorrow dla sensorów 48h z ochroną przed utratą danych."""
+        now_local = dt_util.now()
+        today_str = now_local.strftime("%Y-%m-%d")
+        current_hour_prefix = now_local.strftime("%Y-%m-%dT%H:00")
+
+        main_today = self._format_price_frames_for_attributes(
+            pricing_today, cheap_thresh, expensive_thresh
+        )
+
+        frames_tomorrow = (
+            pricing_tomorrow.get("frames")
+            if pricing_tomorrow and isinstance(pricing_tomorrow, dict)
+            else None
+        )
+        has_real_tomorrow = False
+        if frames_tomorrow and isinstance(frames_tomorrow, list):
+            for frame in frames_tomorrow:
+                if frame.get(ATTR_PRICE_VALUE_GROSS) is not None and frame.get(ATTR_PRICE_VALUE_GROSS) != 0.0:
+                    has_real_tomorrow = True
+                    break
+
+        main_tomorrow = (
+            self._format_price_frames_for_attributes(pricing_tomorrow, cheap_thresh, expensive_thresh)
+            if has_real_tomorrow
+            else []
+        )
+
+        # 1. Aktualizacja price_today
+        if main_today:
+            self._saved_price_today = main_today
+        elif (
+            self._saved_price_tomorrow
+            and isinstance(self._saved_price_tomorrow[0], dict)
+            and today_str in str(self._saved_price_tomorrow[0].get("start", ""))
+        ):
+            # Przejście przez północ: wczorajsze "jutro" staje się "dzisiaj"
+            self._saved_price_today = self._saved_price_tomorrow
+
+        # 2. Aktualizacja price_tomorrow (nie nadpisujemy pustymi danymi)
+        if main_tomorrow:
+            self._saved_price_tomorrow = main_tomorrow
+
+        # 3. Obliczenie bieżącego stanu (state)
+        current_val: Optional[float] = None
+        current_frame = self._get_current_price_frame(pricing_today)
+        if current_frame:
+            price_gross = current_frame.get(ATTR_PRICE_VALUE_GROSS)
+            price_net = current_frame.get(ATTR_PRICE_VALUE_NET)
+            if price_gross is not None and price_gross != 0.0:
+                current_val = price_gross
+            else:
+                current_val = price_net
+
+        # Fallback: szukamy ceny dla bieżącej godziny w zapisanym price_today
+        if current_val is None and self._saved_price_today:
+            for item in self._saved_price_today:
+                if not isinstance(item, dict):
+                    continue
+                start_val = str(item.get("start", ""))
+                if current_hour_prefix in start_val and item.get("price") is not None:
+                    current_val = item.get("price")
+                    break
+
+        if current_val is not None:
+            self._last_valid_price = current_val
+        else:
+            current_val = self._last_valid_price
+
+        return current_val, self._saved_price_today, self._saved_price_tomorrow
 
     def _calculate_average_price(self, pricing_data: Optional[Dict[str, Any]]) -> Optional[float]:
         """Oblicza średnią cenę brutto z ramek cenowych."""
@@ -471,7 +586,12 @@ class PstrykUniversalSensor(CoordinatorEntity, SensorEntity):
         """Aktualizuje stan sensora na podstawie danych z koordynatora."""
         data = self.coordinator.data
         if data is None:
-            if self._sensor_key not in [SENSOR_TOMORROW_PURCHASE_PRICE, SENSOR_TOMORROW_SALE_PRICE]:
+            if self._sensor_key not in [
+                SENSOR_TOMORROW_PURCHASE_PRICE,
+                SENSOR_TOMORROW_SALE_PRICE,
+                SENSOR_BUY_PRICE_48H,
+                SENSOR_SELL_PRICE_48H,
+            ]:
                 self._attr_native_value = None
                 self._attr_extra_state_attributes = {ATTR_DATA_TIMESTAMP: None}
                 return
@@ -607,6 +727,16 @@ class PstrykUniversalSensor(CoordinatorEntity, SensorEntity):
                     if avg_price_tomorrow is not None:
                         attributes[f"{ATTR_AVERAGE_PRICE}_tomorrow"] = avg_price_tomorrow
 
+            elif self._sensor_key in (SENSOR_BUY_PRICE_48H, SENSOR_SELL_PRICE_48H):
+                is_buy = self._sensor_key == SENSOR_BUY_PRICE_48H
+                new_value, p_today, p_tomorrow = self._update_48h_price_sensor(
+                    pricing_purchase_today if is_buy else pricing_prosumer_today,
+                    pricing_purchase_tomorrow if is_buy else pricing_prosumer_tomorrow,
+                    cheap_purchase_thresh if is_buy else cheap_sale_thresh,
+                    expensive_purchase_thresh if is_buy else expensive_sale_thresh,
+                )
+                attributes[ATTR_PRICE_TODAY_48H] = p_today
+                attributes[ATTR_PRICE_TOMORROW_48H] = p_tomorrow
 
             elif self._sensor_key == SENSOR_CONSUMPTION_DAILY_COST:
                 cost_frames = meter_cost_data.get("frames") if meter_cost_data else None
@@ -770,7 +900,12 @@ class PstrykUniversalSensor(CoordinatorEntity, SensorEntity):
             if self._sensor_key in [SENSOR_TOMORROW_PURCHASE_PRICE, SENSOR_TOMORROW_SALE_PRICE] and new_value is None:
                 attributes.pop(ATTR_PRICE_TOMORROW, None)
                 attributes.pop(f"{ATTR_AVERAGE_PRICE}_tomorrow", None)
-            self._attr_extra_state_attributes = {k: v for k, v in attributes.items() if v is not None and (not isinstance(v, list) or v)}
+            self._attr_extra_state_attributes = {
+                k: v
+                for k, v in attributes.items()
+                if v is not None
+                and (not isinstance(v, list) or v or k in (ATTR_PRICE_TODAY_48H, ATTR_PRICE_TOMORROW_48H))
+            }
 
         except Exception as e: # pragma: no cover
             _LOGGER.error(f"({self.name}) Błąd podczas aktualizacji stanu ({self._sensor_key}): {e}", exc_info=True)

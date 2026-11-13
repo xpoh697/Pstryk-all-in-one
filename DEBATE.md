@@ -149,3 +149,26 @@ refresh_today_prosumer = (coordinator._date_prices_today_fetched != current_loca
 
 ### Заключение
 Решено дополнить условие `refresh_today_prosumer` проверкой актуальности даты кэша цен продажи (`is_prosumer_for_today`).
+
+
+---
+
+## [2026-11-13 12:24] Задача: надо добавить сенсоры pstryk_sell_price_48h и pstryk_buy_price_48h в интеграцию
+
+### Archi
+Вместо внешних template-сенсоров в YAML встроим `pstryk_buy_price_48h` и `pstryk_sell_price_48h` прямо в `sensor.py` интеграции `pstryk_aio`:
+1. В `const.py` добавим константы `SENSOR_BUY_PRICE_48H = "pstryk_buy_price_48h"`, `SENSOR_SELL_PRICE_48H = "pstryk_sell_price_48h"`, `ATTR_PRICE_TODAY_48H = "price_today"` и `ATTR_PRICE_TOMORROW_48H = "price_tomorrow"`.
+2. В `SENSOR_DESCRIPTIONS_MAP` зарегистрируем оба сенсора с `SensorStateClass.MEASUREMENT`, единицей `PLN/kWh` и иконкой `mdi:currency-eur`. Зададим `self._attr_name = sensor_key` и `self.entity_id = f"sensor.{sensor_key}"`, чтобы `entity_id` и `unique_id` точно совпадали с `pstryk_buy_price_48h` и `pstryk_sell_price_48h`.
+3. Внутри `PstrykUniversalSensor` будем хранить буферы `_saved_price_today`, `_saved_price_tomorrow` и `_last_valid_price`, обновляя их при каждом цикле координатора и в начале каждого часа (`_hourly_refresh_state`), включая перенос `price_tomorrow -> price_today` при переходе через полночь.
+
+### Skeptic
+Критика решения из 3 пунктов:
+1. **Потеря доступности (`available = False`) при сбое координатора**: Если `coordinator.last_update_success` станет `False` при сбое API, стандартное свойство `available` переведет сенсоры в `unavailable`, обнулив смысл резервного кэша. Для `SENSOR_BUY_PRICE_48H` и `SENSOR_SELL_PRICE_48H` свойство `available` должно всегда возвращать `True`.
+2. **Холодный старт после перезагрузки HA (`RestoreEntity`)**: Если хранить `_saved_price_today` и `_saved_price_tomorrow` только в оперативной памяти объекта, то при рестарте HA во время сбоя API буферы окажутся пустыми. Необходимо унаследовать `RestoreEntity` и восстанавливать последнее состояние и атрибуты `price_today`/`price_tomorrow` в `async_added_to_hass`.
+3. **Обработка нулевой цены `0.0` и пустых списков атрибутов**: Проверка цены должна выполняться через `is not None`, чтобы легитимная цена `0.0` не отбрасывалась, а фильтр `_attr_extra_state_attributes` в конце `_update_state` не должен удалять ключи `price_today` и `price_tomorrow`, даже если список пуст `[]`.
+
+### Заключение
+Принято консолидированное решение:
+1. Добавить `SENSOR_BUY_PRICE_48H`, `SENSOR_SELL_PRICE_48H`, `ATTR_PRICE_TODAY_48H`, `ATTR_PRICE_TOMORROW_48H` в `const.py`.
+2. Унаследовать `RestoreEntity` в `PstrykUniversalSensor`, восстанавливать состояние и атрибуты `price_today`/`price_tomorrow` при старте HA, сделать оба сенсора всегда доступными (`available = True`) и обновлять их каждый час в `00` минут.
+3. Реализовать метод `_update_48h_price_sensor` со строгой проверкой `is not None`, автоматическим переносом `price_tomorrow -> price_today` при наступлении нового дня, поиском цены текущего часа в `price_today` при отказе основного источника и сохранением предыдущего состояния при полном отсутствии данных.

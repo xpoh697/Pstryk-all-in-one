@@ -51,6 +51,8 @@ SENSOR_TODAY_PURCHASE_PRICE = "today_purchase_price" # Obecna cena zakupu (dziś
 SENSOR_TOMORROW_PURCHASE_PRICE = "tomorrow_purchase_price" # Pierwsza cena zakupu (jutro)
 SENSOR_TODAY_SALE_PRICE = "today_sale_price" # Obecna cena sprzedaży (dziś)
 SENSOR_TOMORROW_SALE_PRICE = "tomorrow_sale_price" # Pierwsza cena sprzedaży (jutro)
+SENSOR_BUY_PRICE_48H = "pstryk_buy_price_48h"
+SENSOR_SELL_PRICE_48H = "pstryk_sell_price_48h"
 SENSOR_CONSUMPTION_DAILY_COST = "daily_consumption_cost" 
 SENSOR_PRODUCTION_DAILY_YIELD = "daily_production_yield"
 SENSOR_BILLING_BALANCE_MONTHLY_PLN = "billing_balance_monthly_pln"
@@ -84,6 +86,8 @@ FRIENDLY_NAME_PRODUCTION_MONTHLY_YIELD_PLN = "Miesięczna wartość produkcji en
 # Atrybuty dla sensorów cenowych
 ATTR_PRICE_TODAY = "today_prices" 
 ATTR_PRICE_TOMORROW = "tomorrow_prices" 
+ATTR_PRICE_TODAY_48H = "price_today"
+ATTR_PRICE_TOMORROW_48H = "price_tomorrow"
 ATTR_PRICE_START_TIME = "start" 
 ATTR_PRICE_END_TIME = "end"     
 ATTR_PRICE_VALUE_NET = "price_net" 
@@ -124,4 +128,3 @@ USAGE_FRAME_RAE_KWH = "rae"
 COST_FRAME_FAE_COST = "fae_cost"
 COST_FRAME_RAE_YIELD = "energy_sold_value"
 COST_FRAME_ENERGY_BALANCE_VALUE = "energy_balance_value"
- 
